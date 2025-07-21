@@ -764,62 +764,57 @@ def get_kernel_metadata(
         detailed_metadata.append(f"{wrapper.comment} Graph fragment:")
         all_reads: OrderedSet[str] = OrderedSet()
         all_writes: list[str] = []
-        try:
-            if not isinstance(node_schedule, ir.ExternKernel):
-                from .virtualized import V
+        if not isinstance(node_schedule, ir.ExternKernel):
+            from .virtualized import V
 
-                def get_buffer_info(
-                    buffer: Union[ir.TensorBox, ir.Buffer, ir.TorchBindObject],
-                ) -> tuple[str, ir.Layout]:
-                    if isinstance(buffer, ir.TensorBox) and isinstance(
-                        buffer.data, ir.StorageBox
-                    ):
-                        origin_node = buffer.data.data.origin_node
-                    else:
-                        origin_node = buffer.origin_node
-                    if origin_node is None:
-                        name = r.name
-                    else:
-                        name = origin_node.name
-                    return name, buffer.get_layout()
+            def get_buffer_info(
+                buffer: Union[ir.TensorBox, ir.Buffer, ir.TorchBindObject],
+            ) -> tuple[str, ir.Layout]:
+                if isinstance(buffer, ir.TensorBox) and isinstance(
+                    buffer.data, ir.StorageBox
+                ):
+                    origin_node = buffer.data.data.origin_node
+                else:
+                    origin_node = buffer.origin_node
+                if origin_node is None:
+                    name = r.name
+                else:
+                    name = origin_node.name
+                return name, buffer.get_layout()
 
-                def stringify_shape(shape: Iterable[int]) -> str:
-                    return f"[{', '.join([str(x) for x in shape])}]"
+            def stringify_shape(shape: Iterable[int]) -> str:
+                return f"[{', '.join([str(x) for x in shape])}]"
 
-                def stringfy_layout(layout: ir.Layout) -> str:
-                    shape_annotation = f"{stringify_shape(layout.size)}"
-                    stride_annotation = f"{stringify_shape(layout.stride)}"
-                    device_annotation = f"{layout.device}"
+            def stringfy_layout(layout: ir.Layout) -> str:
+                shape_annotation = f"{stringify_shape(layout.size)}"
+                stride_annotation = f"{stringify_shape(layout.stride)}"
+                device_annotation = f"{layout.device}"
 
-                    return (
-                        f'"{dtype_abbrs[layout.dtype]}{shape_annotation}'
-                        f'{stride_annotation}{device_annotation}"'
+                return (
+                    f'"{dtype_abbrs[layout.dtype]}{shape_annotation}'
+                    f'{stride_annotation}{device_annotation}"'
+                )
+
+            for n in node_schedule:
+                if not hasattr(n, "node") or n.node is None:
+                    continue
+                for r in n.node.get_reads():
+                    # Remove the dupricated inputs
+                    if r.name in all_reads:
+                        continue
+                    all_reads.add(r.name)
+                    buffer = V.graph.get_buffer(r.name)
+                    input_name, layout = get_buffer_info(buffer)
+                    detailed_metadata.append(
+                        f"{wrapper.comment}   %{input_name} : Tensor "
+                        f"{stringfy_layout(layout)} = PlaceHolder[target={input_name}]"
                     )
 
-                for n in node_schedule:
-                    if not hasattr(n, "node") or n.node is None:
-                        continue
-                    for r in n.node.get_reads():
-                        # Remove the dupricated inputs
-                        if r.name in all_reads:
-                            continue
-                        all_reads.add(r.name)
-                        buffer = V.graph.get_buffer(r.name)
-                        input_name, layout = get_buffer_info(buffer)
-                        detailed_metadata.append(
-                            f"{wrapper.comment}   %{input_name} : Tensor "
-                            f"{stringfy_layout(layout)} = PlaceHolder[target={input_name}]"
-                        )
+                for w in n.node.get_writes():
+                    buffer = V.graph.get_buffer(w.name)
+                    output_name, _ = get_buffer_info(buffer)
 
-                    for w in n.node.get_writes():
-                        buffer = V.graph.get_buffer(w.name)
-                        output_name, _ = get_buffer_info(buffer)
-
-                        all_writes.append("%" + output_name)
-        except Exception as e:
-            log.warning(
-                f"Exception occurred when getting input/output tensors for FX graph of triton kernel : {e}"  # noqa: G004
-            )
+                    all_writes.append("%" + output_name)
 
         for node in inductor_nodes:
             detailed_metadata.append(f"{wrapper.comment}   {node.format_node()}")
