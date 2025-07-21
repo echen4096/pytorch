@@ -715,7 +715,11 @@ def tuned_mm(mat1, mat2, *, layout=None):
     if is_nonzero and use_triton_template(layout):
         # Get template params using the new unified function
         for kwargs in V.choices.get_mm_configs(
-            kernel_inputs, layout, mm_template.name, "mm"
+            kernel_inputs,
+            layout,
+            op_name=name,
+            template_name=mm_template.name,
+            template_hash=mm_template.src_hash,
         ):
             mm_template.maybe_append_choice(
                 choices,
@@ -727,7 +731,11 @@ def tuned_mm(mat1, mat2, *, layout=None):
         if use_triton_tma_template(mat1, mat2):
             # Get TMA template params using the new unified function
             for kwargs in V.choices.get_mm_configs(
-                kernel_inputs, layout, persistent_tma_mm_template.name, "mm"
+                kernel_inputs,
+                layout,
+                op_name=name,
+                template_name=persistent_tma_mm_template.name,
+                template_hash=persistent_tma_mm_template.src_hash,
             ):
                 persistent_tma_mm_template.maybe_append_choice(
                     choices,
@@ -794,7 +802,7 @@ def tuned_mm(mat1, mat2, *, layout=None):
     if (
         is_nonzero
         and use_cutlass_template(layout, m, n, k)
-        and _use_cutlass_for_op("mm")
+        and _use_cutlass_for_op(name)
     ):
         CUTLASS3xGemmTemplate.add_cutlass_gemm_choices(
             choices, layout, kernel_inputs.nodes()
@@ -884,7 +892,7 @@ def tuned_int_mm(mat1, mat2, *, layout=None):
     m, n, k, layout, mat1, mat2 = mm_args(
         mat1, mat2, layout=layout, out_dtype=torch.int32
     )
-
+    name = "int_mm"
     # below is for getting an overview logging info of inductor mms
     counters["aten_mm_info"][f"aten._int_mm_{m}_{n}_{k}"] += 1
     log.info(
@@ -907,14 +915,18 @@ def tuned_int_mm(mat1, mat2, *, layout=None):
     # Create MMKernelInputs for Int MM
     kernel_inputs = MMKernelInputs([mat1, mat2])
 
-    if use_cutlass and _use_cutlass_for_op("int_mm"):
+    if use_cutlass and _use_cutlass_for_op(name):
         CUTLASS3xGemmTemplate.add_cutlass_gemm_choices(
             choices, layout, kernel_inputs.nodes(), fuseable=True, non_fuseable=True
         )
 
     if is_nonzero and use_triton_template(layout, enable_int32=True):
         for kwargs in V.choices.get_mm_configs(
-            kernel_inputs, layout, mm_template.name, "int_mm"
+            kernel_inputs,
+            layout,
+            op_name=name,
+            template_name=mm_template.name,
+            template_hash=mm_template.src_hash,
         ):
             mm_template.maybe_append_choice(
                 choices,
@@ -923,7 +935,7 @@ def tuned_int_mm(mat1, mat2, *, layout=None):
                 **kwargs,
             )
 
-    return autotune_select_algorithm("int_mm", choices, kernel_inputs.nodes(), layout)
+    return autotune_select_algorithm(name, choices, kernel_inputs.nodes(), layout)
 
 
 @register_lowering(aten.addmm, type_promotion_kind=None)
@@ -1018,7 +1030,11 @@ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
     if is_nonzero and use_triton_template(layout):
         # Get template params using the new unified function
         for kwargs in V.choices.get_mm_configs(
-            kernel_inputs, layout, mm_template.name, name
+            kernel_inputs,
+            layout,
+            op_name=name,
+            template_name=mm_template.name,
+            template_hash=mm_template.src_hash,
         ):
             mm_template.maybe_append_choice(
                 choices,
@@ -1033,7 +1049,11 @@ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
         if use_triton_tma_template(mat1, mat2):
             # Get TMA template params using the new unified function
             for kwargs in V.choices.get_mm_configs(
-                kernel_inputs, layout, persistent_tma_mm_template.name, name
+                kernel_inputs,
+                layout,
+                op_name=name,
+                template_name=persistent_tma_mm_template.name,
+                template_hash=persistent_tma_mm_template.src_hash,
             ):
                 persistent_tma_mm_template.maybe_append_choice(
                     choices,
@@ -1099,6 +1119,7 @@ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
 
     # Safe noop if lookup table is not in use
     choices = lookup_table_extract_choices(choices, add_aten)
+
     return autotune_select_algorithm(name, choices, kernel_inputs.nodes(), layout)
 
 
@@ -1185,6 +1206,7 @@ def tuned_scaled_mm(
     m, n, k, layout, mat_a, mat_b = mm_args(
         mat_a, mat_b, layout=layout, out_dtype=out_dtype
     )
+    name = "scaled_mm"
     # below is for getting an overview logging info of inductor mms
     counters["aten_mm_info"][f"aten._scaled_mm.default_{m}_{n}_{k}"] += 1
     log.info(
@@ -1219,7 +1241,7 @@ def tuned_scaled_mm(
 
     # We dont have triton lowerings for the MX variants yet
     if scale_a.dtype != torch.float32:
-        return autotune_select_algorithm("scaled_mm", choices, input_nodes, layout)
+        return autotune_select_algorithm(name, choices, input_nodes, layout)
 
     _, is_nonzero = _is_static_problem(layout)
 
@@ -1262,7 +1284,11 @@ def tuned_scaled_mm(
         if use_triton_tma_template(mat_a, mat_b) and not bias:
             # Get TMA template params using the new unified function
             for kwargs in V.choices.get_mm_configs(
-                kernel_inputs, layout, scaled_mm_device_tma_template.name, "scaled_mm"
+                kernel_inputs,
+                layout,
+                op_name=name,
+                template_name=scaled_mm_device_tma_template.name,
+                template_hash=scaled_mm_device_tma_template.src_hash,
             ):
                 kwargs["USE_FAST_ACCUM"] = use_fast_accum
                 scaled_mm_device_tma_template.maybe_append_choice(
@@ -1278,7 +1304,11 @@ def tuned_scaled_mm(
 
         # Get template params using the new unified function
         for kwargs in V.choices.get_mm_configs(
-            kernel_inputs, layout, mm_template.name, "scaled_mm"
+            kernel_inputs,
+            layout,
+            op_name=name,
+            template_name=mm_template.name,
+            template_hash=mm_template.src_hash,
         ):
             kwargs["USE_FAST_ACCUM"] = use_fast_accum
             if V.graph.sizevars.guard_or_false(sympy.Le(k, 16)):
