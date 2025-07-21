@@ -45,6 +45,7 @@
 #include <ATen/ops/aminmax_native.h>
 #include <ATen/ops/any_meta.h>
 #include <ATen/ops/any_native.h>
+#include <ATen/ops/arange.h>
 #include <ATen/ops/argmax_meta.h>
 #include <ATen/ops/argmax_native.h>
 #include <ATen/ops/argmin_meta.h>
@@ -71,6 +72,8 @@
 #include <ATen/ops/exp.h>
 #include <ATen/ops/gather.h>
 #include <ATen/ops/gradient_native.h>
+#include <ATen/ops/hash_tensor.h>
+#include <ATen/ops/hash_tensor_native.h>
 #include <ATen/ops/imag.h>
 #include <ATen/ops/isnan_native.h>
 #include <ATen/ops/linalg_vector_norm.h>
@@ -92,6 +95,8 @@
 #include <ATen/ops/norm_meta.h>
 #include <ATen/ops/norm_native.h>
 #include <ATen/ops/ones.h>
+#include <ATen/ops/pad.h>
+#include <ATen/ops/permute.h>
 #include <ATen/ops/prod.h>
 #include <ATen/ops/prod_meta.h>
 #include <ATen/ops/prod_native.h>
@@ -398,6 +403,19 @@ TORCH_META_FUNC(amin)
   resize_reduction(*this, self, dim, keepdim, out_dtype);
 }
 
+TORCH_META_FUNC(hash_tensor)
+(const Tensor& self, IntArrayRef dim, bool keepdim, int64_t mode) {
+  auto maybe_result = maybe_get_output();
+  if (maybe_result.defined()){
+    TORCH_CHECK(maybe_result.scalar_type() == at::kUInt64, "Expected result to be of dtype long, but got ", maybe_result.scalar_type());
+  }
+  if (self.sym_numel() == 0) {
+    native::zero_numel_check_dims(self, dim, "hash_tensor");
+  }
+  resize_reduction(*this, self, dim, keepdim, at::kUInt64);
+}
+
+
 } // namespace at::meta
 
 namespace at::native {
@@ -441,6 +459,7 @@ DEFINE_DISPATCH(argmin_stub);
 DEFINE_DISPATCH(cumsum_stub);
 DEFINE_DISPATCH(cumprod_stub);
 DEFINE_DISPATCH(logcumsumexp_stub);
+DEFINE_DISPATCH(xor_sum_stub);
 
 Tensor _logcumsumexp_cpu(const Tensor& self, int64_t dim) {
   Tensor result = at::empty_like(self, MemoryFormat::Contiguous);
@@ -2231,6 +2250,39 @@ std::tuple<Tensor&, Tensor&> cummin_out(const Tensor& self, Dimname dim, Tensor&
 
 Tensor dist(const Tensor &self, const Tensor& other, const Scalar& p){
   return at::norm(self - other, p);
+}
+
+enum class HashMode { XOR_SUM = 0 };
+
+TORCH_IMPL_FUNC(hash_tensor_out) (const Tensor& self, IntArrayRef dim, bool keepdim, int64_t mode, const Tensor& result)  {
+
+  auto result_view = result;
+  if (self.is_floating_point()){ // && !self.device().is_cpu()) {
+    result_view = result.view(at::kDouble);
+  }
+
+  // // FIXME: remove this branch for CPU
+  auto self_view = self;
+  // if (self.device().is_cpu()) {
+  //   if (self.is_floating_point()) {
+  //     self_view = self.to(at::kDouble).view(at::kUInt64);
+  //   } else {
+  //     self_view = self.to(at::kUInt64);
+  //   }
+  // }
+
+  auto iter = meta::make_reduction(self_view, result_view, dim, keepdim, self_view.scalar_type());
+  switch (static_cast<HashMode>(mode)) {
+    case HashMode::XOR_SUM:
+      if (iter.numel() == 0) {
+          result.fill_(0);
+      } else {
+        xor_sum_stub(iter.device_type(), iter);
+      }
+      return;
+    default:
+      TORCH_CHECK(false, "Unknown hash_tensor mode: ", mode);
+  }
 }
 
 bool cpu_equal(const Tensor& self, const Tensor& other) {
