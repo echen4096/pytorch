@@ -1,10 +1,16 @@
 # mypy: allow-untyped-defs
 
 import logging
+from typing import Any
 
 import torch
 
 from ..kernel_inputs import MMKernelInputs
+from ..lookup_table import (
+    lookup_op_config_entries,
+    lookup_table_extract_choices,
+    lookup_template_configs_from_op,
+)
 from ..lowering import lowerings
 from ..select_algorithm import (
     autotune_select_algorithm,
@@ -149,12 +155,20 @@ def tuned_mm_plus_mm(mat1, mat2, mat3, mat4, *, layout=None):
     kernel_inputs = MMKernelInputs([mat1, mat2, mat3, mat4], mat1_idx=0, mat2_idx=1)
 
     assert layout1 == layout2
+    # Get lookup table configs grouped by template_id
+    op_lookup_dict = lookup_op_config_entries(kernel_inputs.nodes(), "mm_plus_mm")
+    aten_params = lookup_template_configs_from_op(op_lookup_dict, "aten")
+
     # options to tune from
-    choices = (
-        [aten_mm_plus_mm.bind(kernel_inputs.nodes(), layout1)]
-        if use_aten_gemm_kernels()
-        else []
-    )
+    def add_aten():
+        return [aten_mm_plus_mm.bind(kernel_inputs.nodes(), layout1)]
+
+    choices: list[Any] = []
+    if use_aten_gemm_kernels():
+        if aten_params is None or len(aten_params) > 0:
+            # Either the lookup table asked for ATEN, or the lookup table is not
+            # in use in which case, we should add ATEN
+            choices = choices + add_aten()
 
     if use_triton_template(layout1):
         # Get template params using the new unified function
@@ -171,6 +185,9 @@ def tuned_mm_plus_mm(mat1, mat2, mat3, mat4, *, layout=None):
                     layout=layout1,
                     **kwargs,
                 )
+
+    # Safe noop if lookup table is not in use
+    choices = lookup_table_extract_choices(choices, add_aten)
 
     return autotune_select_algorithm(
         "mm_plus_mm", choices, kernel_inputs.nodes(), layout1
